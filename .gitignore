@@ -201,5 +201,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-.tmp_dagster_home_8goh2thj/history/runs.db
-.tmp_dagster_home_8goh2thj/history/runs.db
+
+# Dagster temporary files
+.tmp_dagster*/
+
+# DuckDB files
+*.duckdb
