@@ -4,10 +4,14 @@ from databricks import sql
 import os
 from dotenv import load_dotenv
 import duckdb
+from .partitions import daily_partition
+#from defs.assets.partitions import daily_partition
+from dagster import build_asset_context
 
 
-@dg.asset
-def raw_patients() -> None:
+@dg.asset(partitions_def=daily_partition)
+
+def raw_patients(context: dg.AssetExecutionContext) -> None:
     """Asset representing the landing patient data. (landing layer)
        Get the data from Databricks and save into parquet format.
     """
@@ -17,6 +21,9 @@ def raw_patients() -> None:
     env_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", ".env")
     load_dotenv(env_path)
     
+
+    partition_date_str = context.partition_key
+    print(partition_date_str)
     # Retrieve Databricks connection details from environment variables
     server_hostname = os.getenv("DATABRICKS_HOST")
     http_path = os.getenv("DATABRICKS_HTTP_PATH")
@@ -38,9 +45,9 @@ def raw_patients() -> None:
     ) as connection:
         with connection.cursor() as cursor:
             # Unity Catalog uses a 3-level namespace: catalog.schema.table
-            cursor.execute("""SELECT * FROM 
+            cursor.execute(f"""SELECT * FROM 
                            workspace.default.bronze_customers 
-                           WHERE CAST(TO_TIMESTAMP(operation_date, 'MM-dd-yyyy HH:mm:ss') AS DATE) = DATE ('2025-10-01')
+                           WHERE CAST(TO_TIMESTAMP(operation_date, 'MM-dd-yyyy HH:mm:ss') AS DATE) = DATE ('{partition_date_str}')
                            """)
 
 
@@ -48,6 +55,7 @@ def raw_patients() -> None:
             df = cursor.fetchall_arrow().to_pandas()
             
             print(df.head())
+            print(df.count())
             # Write to parquet file
             output_dir = "data/raw/landing"
             os.makedirs(output_dir, exist_ok=True)
@@ -144,8 +152,9 @@ def gold_deleted_patients() -> None:
     # df = conn.execute(query).fetchdf()
     # print(df)
 
-
-#raw_patients()
+#Local test
+context = build_asset_context(partition_key="2025-10-01")  # pass a partition if needed
+raw_patients(context)
 #bronze_patients()
 # silver_patients()
 # gold_deleted_patients()
