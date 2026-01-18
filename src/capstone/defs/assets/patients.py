@@ -3,6 +3,7 @@ import pandas as pd
 from databricks import sql
 import os
 from dotenv import load_dotenv
+import duckdb
 
 
 @dg.asset
@@ -12,12 +13,23 @@ def raw_patients() -> None:
     """
     # here is coming the Databricks logic to load patient data
     # Load environment variables from a .env file
-    load_dotenv()
+    # Use explicit path to find .env from workspace root
+    env_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", ".env")
+    load_dotenv(env_path)
     
     # Retrieve Databricks connection details from environment variables
     server_hostname = os.getenv("DATABRICKS_HOST")
     http_path = os.getenv("DATABRICKS_HTTP_PATH")
     access_token = os.getenv("DATABRICKS_TOKEN")
+    
+
+    # Debug: Print loaded variables
+    # print(f"DATABRICKS_HOST: {server_hostname}")
+    # print(f"DATABRICKS_HTTP_PATH: {http_path}")
+    # print(f"DATABRICKS_TOKEN: {access_token}")
+    
+    if not all([server_hostname, http_path, access_token]):
+        raise ValueError("Missing Databricks environment variables. Check your .env file.")
     
     with sql.connect(
         server_hostname=server_hostname,
@@ -26,36 +38,85 @@ def raw_patients() -> None:
     ) as connection:
         with connection.cursor() as cursor:
             # Unity Catalog uses a 3-level namespace: catalog.schema.table
-            cursor.execute("SELECT count(*) FROM workspace.default.bronze_customers where LIMIT 15")
+            cursor.execute("SELECT * FROM workspace.default.bronze_customers where LIMIT 15")
 
 
             # Fetch as a Pandas DataFrame
             df = cursor.fetchall_arrow().to_pandas()
             
+            print(df.head())
             # Write to parquet file
             output_dir = "data/raw/landing"
             os.makedirs(output_dir, exist_ok=True)
             df.to_parquet(f"{output_dir}/patients.parquet")
 
 
-@dg.asset
+@dg.asset(deps=["raw_patients"])
 def bronze_patients() -> None:
     """Asset representing the staging patient data. (bronze layer)"""
     # here is coming the inmemory logic to load patient data into DuckDB 
-    pass
+    output_dir = "data/raw/landing/patients.parquet"
+    conn = duckdb.connect("data.duckdb")
+    
+    # Check if table exists
+    result = conn.execute("SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'bronze_patients'").fetchall()
+    
+    if result[0][0] > 0:
+        # Table exists, insert into it
+        conn.execute(f"INSERT INTO bronze_patients SELECT * FROM '{output_dir}'")
+        print("Data inserted into existing bronze_patients table")
+    else:
+        # Table doesn't exist, create it
+        conn.execute(f"CREATE TABLE bronze_patients AS SELECT * FROM '{output_dir}'")
+        print("New bronze_patients table created")
+    
 
 
 @dg.asset(deps=["bronze_patients"])
 def silver_patients() -> None:
     """Asset representing the cleaned patient data. (silver layer)"""
-    # here is coming the in memory logic to load patient data to the next layer in DuckDB
-    pass
-
-
+    # here is coming the in memory logic to load patient data to the next layer in DuckDB and casting columns
+    query = """ INSERT INTO silver_patients
+                SELECT address as address,
+                email as email,
+                firstname as first_name,
+                lastname as last_name,
+                concat(firstname, ' ', lastname) AS full_name,
+                id as patient_id,
+                operation as operation,
+                operation_date as operation_date,
+                load_ts as load_timestamp
+                FROM bronze_patients 
+                --WHERE operation_date > '2023-01-01'"""
+    
+    conn = duckdb.connect("data.duckdb")
+    conn.execute(query)
+    print("silver_patients table inserted from bronze_patients")
+    # df = conn.execute(query).fetchdf()
+    # print(df)
 
 @dg.asset(deps=["silver_patients"])
-def gold_patients() -> None:
+def gold_deleted_patients() -> None:
     """Asset representing the curated patient data. (gold layer)"""
     # here is coming the in memory logic to load patient data to the next layer in DUckDB
-    pass
+    query = """ INSERT INTO gold_deleted_patients
+                SELECT                 
+                patient_id,
+                operation,
+                operation_date,
+                load_timestamp
+                FROM silver_patients 
+                --WHERE operation_date > '2023-01-01'
+                --AND operation = 'DELETED'"""
+    
+    conn = duckdb.connect("data.duckdb")
+    conn.execute(query)
+    print("gold_deleted_patients table inserted from silver_patients")
+    # df = conn.execute(query).fetchdf()
+    # print(df)
 
+
+# raw_patients()
+# bronze_patients()
+# silver_patients()
+gold_deleted_patients()
