@@ -9,7 +9,7 @@ from .partitions import daily_partition
 from dagster import build_asset_context
 
 
-@dg.asset(partitions_def=daily_partition)
+@dg.asset(partitions_def=daily_partition, group_name="raw_patients")
 
 def raw_patients(context: dg.AssetExecutionContext) -> None:
     """Asset representing the landing patient data. (landing layer)
@@ -62,7 +62,7 @@ def raw_patients(context: dg.AssetExecutionContext) -> None:
             df.to_parquet(f"{output_dir}/patients.parquet")
 
 
-@dg.asset(deps=["raw_patients"])
+@dg.asset(deps=["raw_patients"], group_name="bronze_patients")
 def bronze_patients() -> None:
     """Asset representing the staging patient data. (bronze layer)"""
     # here is coming the inmemory logic to load patient data into DuckDB 
@@ -100,7 +100,7 @@ def bronze_patients() -> None:
     
 
 
-@dg.asset(deps=["bronze_patients"])
+@dg.asset(deps=["bronze_patients"], group_name="silver_patients")
 def silver_patients() -> None:
     """Asset representing the cleaned patient data. (silver layer)"""
     # here is coming the in memory logic to load patient data to the next layer in DuckDB and casting columns
@@ -130,7 +130,7 @@ def silver_patients() -> None:
     # df = conn.execute(query).fetchdf()
     # print(df)
 
-@dg.asset(deps=["silver_patients"])
+@dg.asset(deps=["silver_patients"], group_name="gold_patients")
 def gold_deleted_patients() -> None:
     """Asset representing the curated patient data. (gold layer)"""
     # here is coming the in memory logic to load patient data to the next layer in DUckDB
