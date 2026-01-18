@@ -38,7 +38,10 @@ def raw_patients() -> None:
     ) as connection:
         with connection.cursor() as cursor:
             # Unity Catalog uses a 3-level namespace: catalog.schema.table
-            cursor.execute("SELECT * FROM workspace.default.bronze_customers where LIMIT 15")
+            cursor.execute("""SELECT * FROM 
+                           workspace.default.bronze_customers 
+                           WHERE CAST(TO_TIMESTAMP(operation_date, 'MM-dd-yyyy HH:mm:ss') AS DATE) = DATE ('2025-10-01')
+                           """)
 
 
             # Fetch as a Pandas DataFrame
@@ -58,17 +61,34 @@ def bronze_patients() -> None:
     output_dir = "data/raw/landing/patients.parquet"
     conn = duckdb.connect("data.duckdb")
     
-    # Check if table exists
-    result = conn.execute("SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'bronze_patients'").fetchall()
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS bronze_patients (
+    address         VARCHAR,
+    email           VARCHAR,
+    firstname       VARCHAR,
+    id              VARCHAR,
+    lastname        VARCHAR,
+    load_ts         VARCHAR,
+    operation       VARCHAR,
+    operation_date  VARCHAR,
+    _rescued_data   VARCHAR
+    ); """)
+
+    print("bronze_patients table created if not exists")
+
+    conn.execute(f"INSERT INTO bronze_patients SELECT * FROM '{output_dir}'")
+    print("Data inserted into existing bronze_patients table")
+    # # Check if table exists
+    # result = conn.execute("SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'bronze_patients'").fetchall()
     
-    if result[0][0] > 0:
-        # Table exists, insert into it
-        conn.execute(f"INSERT INTO bronze_patients SELECT * FROM '{output_dir}'")
-        print("Data inserted into existing bronze_patients table")
-    else:
-        # Table doesn't exist, create it
-        conn.execute(f"CREATE TABLE bronze_patients AS SELECT * FROM '{output_dir}'")
-        print("New bronze_patients table created")
+    # if result[0][0] > 0:
+    #     # Table exists, insert into it
+    #     conn.execute(f"INSERT INTO bronze_patients SELECT * FROM '{output_dir}'")
+    #     print("Data inserted into existing bronze_patients table")
+    # else:
+    #     # Table doesn't exist, create it
+    #     conn.execute(f"CREATE TABLE bronze_patients AS SELECT * FROM '{output_dir}'")
+    #     print("New bronze_patients table created")
     
 
 
@@ -76,16 +96,23 @@ def bronze_patients() -> None:
 def silver_patients() -> None:
     """Asset representing the cleaned patient data. (silver layer)"""
     # here is coming the in memory logic to load patient data to the next layer in DuckDB and casting columns
-    query = """ INSERT INTO silver_patients
-                SELECT address as address,
-                email as email,
-                firstname as first_name,
-                lastname as last_name,
+    query = """ --CREATE TABLE IF NOT EXISTS silver_patients AS
+                INSERT INTO silver_patients
+                SELECT address AS address,
+                email AS email,
+                firstname AS first_name,
+                lastname AS last_name,
                 concat(firstname, ' ', lastname) AS full_name,
-                id as patient_id,
-                operation as operation,
-                operation_date as operation_date,
-                load_ts as load_timestamp
+                id AS patient_id,
+                operation AS operation,
+                CAST(
+                    strptime(operation_date, '%m-%d-%Y %H:%M:%S')
+                    AS DATE
+                ) AS operation_date,
+                CAST(
+                    strptime(load_ts, '%Y-%m-%dT%H:%M:%S.%fZ')
+                    AS TIMESTAMP
+                ) AS load_timestamp
                 FROM bronze_patients 
                 --WHERE operation_date > '2023-01-01'"""
     
@@ -99,15 +126,17 @@ def silver_patients() -> None:
 def gold_deleted_patients() -> None:
     """Asset representing the curated patient data. (gold layer)"""
     # here is coming the in memory logic to load patient data to the next layer in DUckDB
-    query = """ INSERT INTO gold_deleted_patients
+    query = """ --CREATE TABLE IF NOT EXISTS gold_deleted_patients AS
+                INSERT INTO gold_deleted_patients
                 SELECT                 
                 patient_id,
                 operation,
                 operation_date,
                 load_timestamp
                 FROM silver_patients 
-                --WHERE operation_date > '2023-01-01'
-                --AND operation = 'DELETED'"""
+                WHERE 1 = 1
+                --AND operation_date > '2023-01-01'
+                AND operation = 'DELETED'"""
     
     conn = duckdb.connect("data.duckdb")
     conn.execute(query)
@@ -116,7 +145,7 @@ def gold_deleted_patients() -> None:
     # print(df)
 
 
-# raw_patients()
-# bronze_patients()
+#raw_patients()
+#bronze_patients()
 # silver_patients()
-gold_deleted_patients()
+# gold_deleted_patients()
